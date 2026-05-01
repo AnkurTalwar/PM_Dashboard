@@ -25,9 +25,17 @@ import {
   supportsProgramFolderPicker,
 } from '@/lib/program-package';
 import { toast } from 'sonner';
+import {
+  clearExcelExpenseData,
+  getExcelExpenseStoreSnapshot,
+  setExcelExpenseData,
+  subscribeExcelExpenseStore,
+} from '@/lib/excel-expense-store';
+import { parseExcelExpenseFile, validateExcelFile } from '@/lib/excel-expense-parser';
 
 export default function DataImport() {
   const [processingPackage, setProcessingPackage] = useState(false);
+  const [processingExcel, setProcessingExcel] = useState(false);
 
   // Subscribe to WIP store for reactivity
   const wipState = useSyncExternalStore(subscribeWipStore, getWipStoreSnapshot);
@@ -35,9 +43,14 @@ export default function DataImport() {
     subscribeProgramPackageStore,
     getProgramPackageStoreSnapshot,
   );
+  const excelExpenseState = useSyncExternalStore(
+    subscribeExcelExpenseStore,
+    getExcelExpenseStoreSnapshot,
+  );
   const current = wipState.current;
   const history = wipState.history;
   const activePackage = packageState.current;
+  const activeExcelData = excelExpenseState.current;
 
   const handleLoadProgramFolder = useCallback(async () => {
     if (!window.showDirectoryPicker) {
@@ -62,18 +75,64 @@ export default function DataImport() {
     }
   }, []);
 
+  const handleLoadExcelExpenseFile = useCallback(async () => {
+    setProcessingExcel(true);
+    try {
+      // Create file input
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = '.xlsx,.xls';
+      
+      input.onchange = async (e) => {
+        const file = (e.target as HTMLInputElement).files?.[0];
+        if (!file) return;
+        
+        // Validate file
+        const validation = validateExcelFile(file);
+        if (!validation.valid) {
+          toast.error(validation.error);
+          setProcessingExcel(false);
+          return;
+        }
+        
+        // Parse file
+        const result = await parseExcelExpenseFile(file);
+        
+        if (result.success && result.data) {
+          setExcelExpenseData(result.data);
+          toast.success(
+            `Loaded ${file.name}: ${result.data.totalRecords.toLocaleString()} expense records, ${result.data.uniqueEmployees} employees, $${(result.data.totalExpenses/1000).toFixed(0)}K total`
+          );
+        } else {
+          toast.error(result.error || 'Failed to parse Excel file');
+        }
+        
+        setProcessingExcel(false);
+      };
+      
+      input.oncancel = () => {
+        setProcessingExcel(false);
+      };
+      
+      input.click();
+    } catch (err) {
+      toast.error(`Error: ${err instanceof Error ? err.message : 'Unknown error'}`);
+      setProcessingExcel(false);
+    }
+  }, []);
+
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-3xl font-bold">Data Import</h1>
         <p className="text-muted-foreground mt-1">
-          Load a program folder to refresh ETC, LTA, expense, forecast, PTO, and WIP data
+          Load program materials to refresh ETC, LTA, expense, forecast, PTO, and WIP data
         </p>
       </div>
 
       <Card>
         <CardHeader>
-          <CardTitle>Load Program Package Folder</CardTitle>
+          <CardTitle>Load Program ETC Materials</CardTitle>
           <CardDescription>
             Load the full dashboard data package from a local folder instead of using the embedded seed dataset.
             This folder flow replaces the old one-off WIP, forecast, and PTO uploads.
@@ -188,6 +247,75 @@ export default function DataImport() {
                   ))}
                 </tbody>
               </table>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Load Time and Expense Extract</CardTitle>
+          <CardDescription>
+            Upload your "Time and Expense.xlsx" file to automatically populate LTA Tracking and Expense Compliance dashboards.
+            Works with any project using the standard Excel format.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex flex-wrap items-center gap-3">
+            <Button onClick={handleLoadExcelExpenseFile} disabled={processingExcel}>
+              {processingExcel ? 'Processing file…' : 'Upload Excel File'}
+            </Button>
+            {activeExcelData && (
+              <Button
+                variant="ghost"
+                onClick={() => {
+                  clearExcelExpenseData();
+                  toast.info('Excel expense data cleared — using demo data');
+                }}
+              >
+                <Trash2 className="h-4 w-4 mr-1" /> Clear data
+              </Button>
+            )}
+          </div>
+
+          {activeExcelData && (
+            <div className="rounded-md border p-3 text-sm">
+              <p className="font-medium">Active data: {activeExcelData.fileName}</p>
+              <p className="text-xs text-muted-foreground mt-1">
+                Loaded {new Date(activeExcelData.uploadedAt).toLocaleString()} • 
+                Date range: {activeExcelData.dateRange.start.toLocaleDateString()} - {activeExcelData.dateRange.end.toLocaleDateString()}
+              </p>
+              <div className="mt-3 grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
+                <div className="rounded border p-2">
+                  <div className="text-muted-foreground uppercase">Total Records</div>
+                  <div className="font-semibold mt-1">{activeExcelData.totalRecords.toLocaleString()}</div>
+                </div>
+                <div className="rounded border p-2">
+                  <div className="text-muted-foreground uppercase">Employees</div>
+                  <div className="font-semibold mt-1">{activeExcelData.uniqueEmployees}</div>
+                </div>
+                <div className="rounded border p-2">
+                  <div className="text-muted-foreground uppercase">Projects</div>
+                  <div className="font-semibold mt-1">{activeExcelData.uniqueProjects}</div>
+                </div>
+                <div className="rounded border p-2">
+                  <div className="text-muted-foreground uppercase">Total Expenses</div>
+                  <div className="font-semibold mt-1">
+                    {activeExcelData.totalExpenses.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 })}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          <div className="rounded-md border p-4 bg-muted/20">
+            <div className="text-sm font-semibold mb-2">Expected File Format</div>
+            <div className="text-xs text-muted-foreground space-y-2">
+              <p>• Excel file (.xlsx or .xls) named "Time and Expense.xlsx" (or similar)</p>
+              <p>• Must contain an <span className="font-mono bg-background px-1 rounded">EXPENSE</span> sheet</p>
+              <p>• Required columns: Engagement, Employee Name, Staff Level, Work Date, Expenses, Expense Type, Expense Location</p>
+              <p>• Expense types should include: Lodging, Meals, Airfare, Ground Transport, etc.</p>
+              <p className="pt-2 font-medium">This format works across all projects — just upload your expense extract!</p>
             </div>
           </div>
         </CardContent>

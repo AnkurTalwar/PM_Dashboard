@@ -13,10 +13,9 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { mockLtaSummary } from '@/lib/mock-data';
 import { ChartContainer, ChartTooltip, ChartTooltipContent } from '@/components/ui/chart';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, ReferenceLine } from 'recharts';
-import { ChevronDown, Shield, AlertTriangle, CheckCircle } from 'lucide-react';
+import { ChevronDown, Shield, AlertTriangle, CheckCircle, Upload } from 'lucide-react';
 import { KpiCard } from '@/components/KpiCard';
 import { ProjectFilterBadge } from '@/components/ProjectFilterBadge';
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
@@ -25,6 +24,11 @@ import {
   getProgramPackageStoreSnapshot,
   subscribeProgramPackageStore,
 } from '@/lib/program-package';
+import { getLtaSummaryFromExcel, hasLtaData } from '@/lib/lta-adapter';
+import { 
+  subscribeExcelExpenseStore, 
+  getExcelExpenseStoreSnapshot 
+} from '@/lib/excel-expense-store';
 
 const chartConfig = {
   nights: { label: 'Nights', color: 'hsl(var(--chart-1))' },
@@ -166,9 +170,16 @@ export default function LtaTracking() {
   const [selectedStates, setSelectedStates] = useState<string[]>([]);
   const [selectedCities, setSelectedCities] = useState<string[]>([]);
   const [resourceActivityFilter, setResourceActivityFilter] = useState<ResourceActivityFilter>('active');
+  
+  // Subscribe to both data sources
   useSyncExternalStore(subscribeProgramPackageStore, getProgramPackageStoreSnapshot);
-  const packageData = getActiveLtaSummary();
-  const baseLtaData = packageData.length > 0 ? packageData : mockLtaSummary;
+  useSyncExternalStore(subscribeExcelExpenseStore, getExcelExpenseStoreSnapshot);
+  
+  // Get data: Excel first, then program package
+  const excelLtaData = getLtaSummaryFromExcel();
+  const packageLtaData = getActiveLtaSummary();
+  const baseLtaData = excelLtaData.length > 0 ? excelLtaData : packageLtaData;
+  const dataSource = excelLtaData.length > 0 ? 'excel' : packageLtaData.length > 0 ? 'package' : 'none';
 
   const dateBounds = useMemo(() => {
     const allDates = baseLtaData.flatMap((r) => r.lodgingEntries.map((e) => e.date));
@@ -341,6 +352,21 @@ export default function LtaTracking() {
         <h1 className="text-3xl font-bold">LTA Tracking</h1>
         <p className="text-muted-foreground mt-1">Rolling 12-month lodging night compliance (120-night threshold)</p>
       </div>
+      
+      {dataSource === 'none' && (
+        <Card className="border-dashed">
+          <CardContent className="py-8 text-center">
+            <Upload className="h-8 w-8 mx-auto text-muted-foreground mb-3" />
+            <p className="text-sm font-medium">No LTA data available</p>
+            <p className="text-xs text-muted-foreground mt-1">
+              Upload an Excel expense file (Data Import page) or load a program package to view LTA tracking data.
+            </p>
+          </CardContent>
+        </Card>
+      )}
+      
+      {dataSource !== 'none' && (
+        <>
       <ProjectFilterBadge />
 
       <Card>
@@ -533,6 +559,8 @@ export default function LtaTracking() {
           </Table>
         </CardContent>
       </Card>
+      </>
+      )}
     </div>
   );
 }
