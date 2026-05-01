@@ -1,7 +1,6 @@
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
-import { mockExpenseCompliance } from '@/lib/mock-data';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import {
@@ -15,7 +14,7 @@ import {
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { ChartContainer, ChartTooltip, ChartTooltipContent } from '@/components/ui/chart';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, ReferenceLine, PieChart, Pie, Cell } from 'recharts';
-import { ChevronDown, DollarSign, AlertTriangle, CheckCircle } from 'lucide-react';
+import { ChevronDown, DollarSign, AlertTriangle, CheckCircle, Upload } from 'lucide-react';
 import { KpiCard } from '@/components/KpiCard';
 import { ProjectFilterBadge } from '@/components/ProjectFilterBadge';
 import { Fragment, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
@@ -26,6 +25,19 @@ import {
   subscribeProgramPackageStore,
 } from '@/lib/program-package';
 import { evaluateExpenseRules, LEGACY_EXPENSE_RULE_IDS } from '@/lib/expense-compliance';
+import { 
+  getExpenseComplianceFromExcel, 
+  hasExpenseComplianceData,
+  getCustomPolicyLimits,
+  setCustomPolicyLimits,
+  resetPolicyLimits,
+  subscribePolicyLimits,
+  type CustomPolicyLimits
+} from '@/lib/expense-compliance-adapter';
+import { 
+  subscribeExcelExpenseStore, 
+  getExcelExpenseStoreSnapshot 
+} from '@/lib/excel-expense-store';
 
 const chartConfig = {
   meals: { label: 'Meals', color: 'hsl(var(--chart-1))' },
@@ -120,11 +132,67 @@ export default function ExpenseCompliance() {
   const [selectedStates, setSelectedStates] = useState<string[]>([]);
   const [selectedCities, setSelectedCities] = useState<string[]>([]);
   const [resourceActivityFilter, setResourceActivityFilter] = useState<ResourceActivityFilter>('active');
+  
+  // Custom policy limits state
+  const [customLimits, setCustomLimitsState] = useState<CustomPolicyLimits>(getCustomPolicyLimits());
+  const [isEditingLimits, setIsEditingLimits] = useState(false);
+  
+  // Subscribe to policy changes
+  useEffect(() => {
+    const unsubscribe = subscribePolicyLimits(() => {
+      setCustomLimitsState(getCustomPolicyLimits());
+    });
+    return unsubscribe;
+  }, []);
+  
+  // Subscribe to both data sources
   useSyncExternalStore(subscribeProgramPackageStore, getProgramPackageStoreSnapshot);
+  useSyncExternalStore(subscribeExcelExpenseStore, getExcelExpenseStoreSnapshot);
 
+  // Get data: Excel first, then program package (recalculate when customLimits change)
+  const excelExpenseData = useMemo(
+    () => getExpenseComplianceFromExcel(customLimits),
+    [customLimits]
+  );
   const packageData = getActiveExpenseComplianceSummary();
-  const expensePolicy = getActiveExpenseCompliancePolicy();
-  const expenseData = packageData.length > 0 ? packageData : mockExpenseCompliance;
+  const expenseData = excelExpenseData.length > 0 ? excelExpenseData : packageData;
+  const dataSource = excelExpenseData.length > 0 ? 'excel' : packageData.length > 0 ? 'package' : 'none';
+  
+  // Create dynamic expense policy that reflects current custom limits for display
+  const expensePolicy = useMemo(() => {
+    const basePolicy = getActiveExpenseCompliancePolicy();
+    return {
+      ...basePolicy,
+      rules: [
+        {
+          id: LEGACY_EXPENSE_RULE_IDS.meals,
+          name: 'Meals Daily Limit',
+          frequency: 'daily' as const,
+          limit: customLimits.mealsPerDay,
+          expenseTypes: ['Meals' as const],
+          detail: 'Maximum reimbursable meals per day',
+        },
+        {
+          id: LEGACY_EXPENSE_RULE_IDS.lodging,
+          name: 'Lodging Daily Limit',
+          frequency: 'daily' as const,
+          limit: customLimits.lodgingPerNight,
+          expenseTypes: ['Lodging' as const],
+          detail: 'Maximum reimbursable lodging per night',
+        },
+        {
+          id: LEGACY_EXPENSE_RULE_IDS.weekly,
+          name: 'Weekly Non-Airfare Limit',
+          frequency: 'weekly' as const,
+          limit: customLimits.weeklyNonAirfare,
+          expenseTypes: ['Meals' as const, 'Lodging' as const, 'Airfare' as const, 'Ground Transport' as const, 'Other' as const],
+          excludeExpenseTypes: ['Airfare' as const],
+          detail: 'Maximum weekly spend excluding airfare',
+        },
+      ]
+    };
+  }, [customLimits]);
+  
   const mealRule = expensePolicy.rules.find((rule) => rule.id === LEGACY_EXPENSE_RULE_IDS.meals);
   const lodgingRule = expensePolicy.rules.find((rule) => rule.id === LEGACY_EXPENSE_RULE_IDS.lodging);
   const primaryWeeklyRule = expensePolicy.rules.find((rule) => rule.frequency === 'weekly');
@@ -366,6 +434,131 @@ export default function ExpenseCompliance() {
           {expensePolicy.rules.map((rule) => `${rule.name}: ${rule.detail || 'No additional detail provided'}`).join(' | ')}
         </p>
       </div>
+      
+      {/* Policy Thresholds Configuration */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center justify-between">
+            <span>Policy Thresholds</span>
+            <div className="flex gap-2">
+              {isEditingLimits ? (
+                <>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => {
+                      setCustomLimitsState(getCustomPolicyLimits());
+                      setIsEditingLimits(false);
+                    }}
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    size="sm"
+                    onClick={() => {
+                      setCustomPolicyLimits(customLimits);
+                      setIsEditingLimits(false);
+                    }}
+                  >
+                    Apply Changes
+                  </Button>
+                </>
+              ) : (
+                <>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => {
+                      resetPolicyLimits();
+                      setCustomLimitsState(getCustomPolicyLimits());
+                    }}
+                  >
+                    Reset to Defaults
+                  </Button>
+                  <Button
+                    size="sm"
+                    onClick={() => setIsEditingLimits(true)}
+                  >
+                    Edit Thresholds
+                  </Button>
+                </>
+              )}
+            </div>
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Meals Daily Limit</label>
+              <div className="flex items-center gap-2">
+                <span className="text-muted-foreground">$</span>
+                <Input
+                  type="number"
+                  value={customLimits.mealsPerDay}
+                  onChange={(e) => setCustomLimitsState({
+                    ...customLimits,
+                    mealsPerDay: Math.max(0, parseInt(e.target.value) || 0)
+                  })}
+                  disabled={!isEditingLimits}
+                  className="w-32"
+                />
+                <span className="text-sm text-muted-foreground">per day</span>
+              </div>
+            </div>
+            
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Lodging Daily Limit</label>
+              <div className="flex items-center gap-2">
+                <span className="text-muted-foreground">$</span>
+                <Input
+                  type="number"
+                  value={customLimits.lodgingPerNight}
+                  onChange={(e) => setCustomLimitsState({
+                    ...customLimits,
+                    lodgingPerNight: Math.max(0, parseInt(e.target.value) || 0)
+                  })}
+                  disabled={!isEditingLimits}
+                  className="w-32"
+                />
+                <span className="text-sm text-muted-foreground">per night</span>
+              </div>
+            </div>
+            
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Weekly Non-Airfare Limit</label>
+              <div className="flex items-center gap-2">
+                <span className="text-muted-foreground">$</span>
+                <Input
+                  type="number"
+                  value={customLimits.weeklyNonAirfare}
+                  onChange={(e) => setCustomLimitsState({
+                    ...customLimits,
+                    weeklyNonAirfare: Math.max(0, parseInt(e.target.value) || 0)
+                  })}
+                  disabled={!isEditingLimits}
+                  className="w-32"
+                />
+                <span className="text-sm text-muted-foreground">per week</span>
+              </div>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+      
+      {dataSource === 'none' && (
+        <Card className="border-dashed">
+          <CardContent className="py-8 text-center">
+            <Upload className="h-8 w-8 mx-auto text-muted-foreground mb-3" />
+            <p className="text-sm font-medium">No expense data available</p>
+            <p className="text-xs text-muted-foreground mt-1">
+              Upload an Excel expense file (Data Import page) or load a program package to view expense compliance data.
+            </p>
+          </CardContent>
+        </Card>
+      )}
+      
+      {dataSource !== 'none' && (
+        <>
       <ProjectFilterBadge />
 
       <Card>
@@ -689,6 +882,8 @@ export default function ExpenseCompliance() {
           </Table>
         </CardContent>
       </Card>
+      </>
+      )}
     </div>
   );
 }
