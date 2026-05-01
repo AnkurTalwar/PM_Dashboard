@@ -1,0 +1,46 @@
+{
+  "fyConfig": {
+    "rateEscalation": 0.05,
+    "adminFee": 0.12,
+    "marginGoalPerDirector": 870000
+  },
+  "expenseCompliance": {
+    "rules": [
+      {
+        "id": "meals-daily",
+        "name": "Meals Daily Limit",
+        "frequency": "daily",
+        "limit": 79,
+        "expenseTypes": ["Meals"],
+        "detail": "Sum all meal entries by employee/date and flag when over the limit"
+      },
+      {
+        "id": "lodging-daily",
+        "name": "Lodging Daily Limit",
+        "frequency": "daily",
+        "limit": 262,
+        "expenseTypes": ["Lodging"],
+        "detail": "Sum all lodging entries by employee/date and flag when over the limit"
+      },
+      {
+        "id": "weekly-non-airfare",
+        "name": "Weekly Non-Airfare Limit",
+        "frequency": "weekly",
+        "limit": 1350,
+        "expenseTypes": ["Meals", "Lodging", "Airfare", "Ground Transport", "Other"],
+        "excludeExpenseTypes": ["Airfare"],
+        "detail": "Sum all non-airfare entries by employee/week and flag when over the limit"
+      }
+    ]
+  },
+  "expenseForecasts": [
+    {
+      "project": "F3-2026",
+      "remainingNonRecoverableExpenses": 543242
+    },
+    {
+      "project": "F3-2025",
+      "remainingNonRecoverableExpenses": 0
+    }
+  ]
+}

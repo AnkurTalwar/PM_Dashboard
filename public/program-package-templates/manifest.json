@@ -1,0 +1,12 @@
+{
+  "schemaVersion": "1.0",
+  "programId": "fame-2026",
+  "programName": "FAME 2026",
+  "files": {
+    "settings": "settings.json",
+    "forecast": "forecast-data.xlsx",
+    "pto": "pto-data.xlsx",
+    "projects": "projects-data.xlsx",
+    "snapshotsDir": "snapshots"
+  }
+}
