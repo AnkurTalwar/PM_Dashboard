@@ -181,13 +181,20 @@ export default function ExpenseCompliance() {
           detail: 'Maximum reimbursable lodging per night',
         },
         {
-          id: LEGACY_EXPENSE_RULE_IDS.weekly,
-          name: 'Weekly Non-Airfare Limit',
+          id: LEGACY_EXPENSE_RULE_IDS.airfare,
+          name: 'Airfare Weekly Limit',
           frequency: 'weekly' as const,
-          limit: customLimits.weeklyNonAirfare,
+          limit: customLimits.airfarePerWeek,
+          expenseTypes: ['Airfare' as const],
+          detail: 'Maximum reimbursable airfare per week',
+        },
+        {
+          id: LEGACY_EXPENSE_RULE_IDS.weekly,
+          name: 'Total Weekly Limit',
+          frequency: 'weekly' as const,
+          limit: customLimits.weeklyTotal,
           expenseTypes: ['Meals' as const, 'Lodging' as const, 'Airfare' as const, 'Ground Transport' as const, 'Other' as const],
-          excludeExpenseTypes: ['Airfare' as const],
-          detail: 'Maximum weekly spend excluding airfare',
+          detail: 'Maximum weekly spend including all expenses',
         },
       ]
     };
@@ -195,7 +202,8 @@ export default function ExpenseCompliance() {
   
   const mealRule = expensePolicy.rules.find((rule) => rule.id === LEGACY_EXPENSE_RULE_IDS.meals);
   const lodgingRule = expensePolicy.rules.find((rule) => rule.id === LEGACY_EXPENSE_RULE_IDS.lodging);
-  const primaryWeeklyRule = expensePolicy.rules.find((rule) => rule.frequency === 'weekly');
+  const airfareRule = expensePolicy.rules.find((rule) => rule.id === LEGACY_EXPENSE_RULE_IDS.airfare);
+  const primaryWeeklyRule = expensePolicy.rules.find((rule) => rule.frequency === 'weekly' && rule.id === LEGACY_EXPENSE_RULE_IDS.weekly);
   const ruleNameById = useMemo(
     () => Object.fromEntries(expensePolicy.rules.map((rule) => [rule.id, rule.name])),
     [expensePolicy.rules],
@@ -369,6 +377,7 @@ export default function ExpenseCompliance() {
           violationCount: ruleResults.violationCount,
           mealViolations: ruleResults.violationsByRule[LEGACY_EXPENSE_RULE_IDS.meals] ?? 0,
           lodgingViolations: ruleResults.violationsByRule[LEGACY_EXPENSE_RULE_IDS.lodging] ?? 0,
+          airfareViolations: ruleResults.violationsByRule[LEGACY_EXPENSE_RULE_IDS.airfare] ?? 0,
           weeklyViolations: ruleResults.violationsByRule[LEGACY_EXPENSE_RULE_IDS.weekly] ?? 0,
           activityStatus,
         };
@@ -377,7 +386,8 @@ export default function ExpenseCompliance() {
       .filter((employee) => {
         if (resourceActivityFilter === 'all') return true;
         return employee.activityStatus === resourceActivityFilter;
-      });
+      })
+      .sort((a, b) => b.totalExpenses - a.totalExpenses);
   }, [expenseData, startDate, endDate, dateBounds.min, dateBounds.max, selectedStates, selectedCities, resourceActivityFilter, expensePolicy]);
 
   const categoryTotals = useMemo(
@@ -487,7 +497,7 @@ export default function ExpenseCompliance() {
           </CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
             <div className="space-y-2">
               <label className="text-sm font-medium">Meals Daily Limit</label>
               <div className="flex items-center gap-2">
@@ -525,15 +535,33 @@ export default function ExpenseCompliance() {
             </div>
             
             <div className="space-y-2">
-              <label className="text-sm font-medium">Weekly Non-Airfare Limit</label>
+              <label className="text-sm font-medium">Airfare Weekly Limit</label>
               <div className="flex items-center gap-2">
                 <span className="text-muted-foreground">$</span>
                 <Input
                   type="number"
-                  value={customLimits.weeklyNonAirfare}
+                  value={customLimits.airfarePerWeek}
                   onChange={(e) => setCustomLimitsState({
                     ...customLimits,
-                    weeklyNonAirfare: Math.max(0, parseInt(e.target.value) || 0)
+                    airfarePerWeek: Math.max(0, parseInt(e.target.value) || 0)
+                  })}
+                  disabled={!isEditingLimits}
+                  className="w-32"
+                />
+                <span className="text-sm text-muted-foreground">per week</span>
+              </div>
+            </div>
+            
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Total Weekly Limit</label>
+              <div className="flex items-center gap-2">
+                <span className="text-muted-foreground">$</span>
+                <Input
+                  type="number"
+                  value={customLimits.weeklyTotal}
+                  onChange={(e) => setCustomLimitsState({
+                    ...customLimits,
+                    weeklyTotal: Math.max(0, parseInt(e.target.value) || 0)
                   })}
                   disabled={!isEditingLimits}
                   className="w-32"
@@ -675,7 +703,7 @@ export default function ExpenseCompliance() {
       </Card>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <KpiCard title="Total Expenses" value={`$${totalExpenses.toLocaleString()}`} icon={DollarSign} />
+        <KpiCard title="Total Expenses" value={`$${totalExpenses.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`} icon={DollarSign} />
         <KpiCard title="Total Violations" value={totalViolations} icon={AlertTriangle} trend={totalViolations > 0 ? 'negative' : 'positive'} />
         <KpiCard title="Compliant Employees" value={compliantCount} icon={CheckCircle} trend="positive" />
       </div>
@@ -701,14 +729,28 @@ export default function ExpenseCompliance() {
           </CardContent>
         </Card>
 
-        <Card>
+        <Card className="flex flex-col">
           <CardHeader>
             <CardTitle>By Category</CardTitle>
           </CardHeader>
-          <CardContent>
+          <CardContent className="flex-1 flex flex-col justify-center">
             <ChartContainer config={chartConfig} className="h-[300px]">
               <PieChart>
-                <Pie data={categoryTotals} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={60} outerRadius={100}>
+                <Pie 
+                  data={categoryTotals} 
+                  dataKey="value" 
+                  nameKey="name" 
+                  cx="50%" 
+                  cy="50%" 
+                  innerRadius={60} 
+                  outerRadius={100}
+                  label={(entry) => {
+                    const total = categoryTotals.reduce((sum, item) => sum + item.value, 0);
+                    const percent = ((entry.value / total) * 100).toFixed(1);
+                    return `${percent}%`;
+                  }}
+                  labelLine={false}
+                >
                   {categoryTotals.map((_, i) => (
                     <Cell key={i} fill={COLORS[i]} />
                   ))}
@@ -741,6 +783,7 @@ export default function ExpenseCompliance() {
                 <TableHead className="text-center">Violations</TableHead>
                 <TableHead className="text-center">Meal</TableHead>
                 <TableHead className="text-center">Lodging</TableHead>
+                <TableHead className="text-center">Airfare</TableHead>
                 <TableHead className="text-center">Weekly</TableHead>
                 <TableHead className="text-center">Status</TableHead>
               </TableRow>
@@ -757,10 +800,11 @@ export default function ExpenseCompliance() {
                     }}
                   >
                     <TableCell className="font-medium">{e.employeeName}</TableCell>
-                    <TableCell className="text-right">${e.totalExpenses.toLocaleString()}</TableCell>
+                    <TableCell className="text-right">${e.totalExpenses.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</TableCell>
                     <TableCell className="text-center">{e.violationCount}</TableCell>
                     <TableCell className="text-center">{e.mealViolations}</TableCell>
                     <TableCell className="text-center">{e.lodgingViolations}</TableCell>
+                    <TableCell className="text-center">{e.airfareViolations}</TableCell>
                     <TableCell className="text-center">{e.weeklyViolations}</TableCell>
                     <TableCell className="text-center">
                       <Badge variant={e.violationCount > 0 ? 'destructive' : 'secondary'}>
@@ -770,7 +814,7 @@ export default function ExpenseCompliance() {
                   </TableRow>
                   {expandedRow === e.employeeName && (
                     <TableRow>
-                      <TableCell colSpan={7} className="bg-muted/50 p-0">
+                      <TableCell colSpan={8} className="bg-muted/50 p-0">
                         <div className="p-4">
                           <Table>
                             <TableHeader>
@@ -799,15 +843,17 @@ export default function ExpenseCompliance() {
                                 >
                                   <TableCell>{w.weekEnding}</TableCell>
                                   <TableCell className={`text-right ${mealRule && w.meals > mealRule.limit ? 'text-destructive font-medium' : ''}`}>
-                                    ${w.meals}
+                                    ${w.meals.toFixed(2)}
                                   </TableCell>
                                   <TableCell className={`text-right ${lodgingRule && w.lodging > lodgingRule.limit ? 'text-destructive font-medium' : ''}`}>
-                                    ${w.lodging}
+                                    ${w.lodging.toFixed(2)}
                                   </TableCell>
-                                  <TableCell className="text-right">${w.airfare}</TableCell>
-                                  <TableCell className="text-right">${w.ground}</TableCell>
-                                  <TableCell className="text-right">${w.other}</TableCell>
-                                  <TableCell className="text-right font-medium">${w.total}</TableCell>
+                                  <TableCell className={`text-right ${airfareRule && w.airfare > airfareRule.limit ? 'text-destructive font-medium' : ''}`}>
+                                    ${w.airfare.toFixed(2)}
+                                  </TableCell>
+                                  <TableCell className="text-right">${w.ground.toFixed(2)}</TableCell>
+                                  <TableCell className="text-right">${w.other.toFixed(2)}</TableCell>
+                                  <TableCell className="text-right font-medium">${w.total.toFixed(2)}</TableCell>
                                   <TableCell>
                                     {w.hasViolation ? (
                                       <div className="flex flex-wrap gap-1">
@@ -828,41 +874,145 @@ export default function ExpenseCompliance() {
                                 {expandedWeekKey === `${e.employeeName}::${w.weekEnding}` && (
                                   <TableRow>
                                     <TableCell colSpan={9} className="bg-background/60">
-                                      <div className="space-y-2 py-2">
-                                        <div className="text-xs font-medium text-muted-foreground">Violating Transactions</div>
-                                        {e.ruleResults.transactionViolations.filter((v) => v.weekEnding === w.weekEnding).length === 0 ? (
-                                          <div className="text-xs text-muted-foreground">
-                                            No transaction-level violations for this week. This week is flagged by aggregate daily/weekly checks.
+                                      <div className="space-y-4 py-2">
+                                        <div>
+                                          <div className="text-xs font-medium text-muted-foreground mb-2">Violated Category Expenses by Date</div>
+                                          {(() => {
+                                            // Get expense entries for this week
+                                            const weekEntries = e.expenseEntries.filter(entry => entry.weekEnding === w.weekEnding);
+                                            
+                                            // Determine which categories were violated
+                                            const violatedCategories: string[] = [];
+                                            if (mealRule && w.meals > mealRule.limit) violatedCategories.push('Meals');
+                                            if (lodgingRule && w.lodging > lodgingRule.limit) violatedCategories.push('Lodging');
+                                            if (airfareRule && w.airfare > airfareRule.limit) violatedCategories.push('Airfare');
+                                            if (primaryWeeklyRule && w.total > primaryWeeklyRule.limit) {
+                                              // Weekly limit triggered - show all categories including airfare
+                                              ['Meals', 'Lodging', 'Airfare', 'Ground Transport', 'Other'].forEach(cat => {
+                                                if (!violatedCategories.includes(cat)) violatedCategories.push(cat);
+                                              });
+                                            }
+                                            
+                                            // Group entries by violated category and date
+                                            const violatedEntries = weekEntries.filter(entry => 
+                                              violatedCategories.includes(entry.category)
+                                            );
+                                            
+                                            if (violatedEntries.length === 0) {
+                                              return (
+                                                <div className="text-xs text-muted-foreground">
+                                                  No detailed expense breakdown available for this violation.
+                                                </div>
+                                              );
+                                            }
+                                            
+                                            // Group by category
+                                            const byCategory = new Map<string, typeof violatedEntries>();
+                                            violatedEntries.forEach(entry => {
+                                              if (!byCategory.has(entry.category)) {
+                                                byCategory.set(entry.category, []);
+                                              }
+                                              byCategory.get(entry.category)!.push(entry);
+                                            });
+                                            
+                                            return (
+                                              <div className="space-y-3">
+                                                {Array.from(byCategory.entries()).map(([category, entries]) => {
+                                                  const categoryTotal = entries.reduce((sum, e) => sum + e.amount, 0);
+                                                  const isViolated = 
+                                                    (category === 'Meals' && mealRule && w.meals > mealRule.limit) ||
+                                                    (category === 'Lodging' && lodgingRule && w.lodging > lodgingRule.limit) ||
+                                                    (category === 'Airfare' && airfareRule && w.airfare > airfareRule.limit);
+                                                  
+                                                  // Group by date and collect vendors with amounts
+                                                  const byDate = new Map<string, Array<{vendor: string, amount: number}>>();
+                                                  entries.forEach(entry => {
+                                                    if (!byDate.has(entry.date)) {
+                                                      byDate.set(entry.date, []);
+                                                    }
+                                                    byDate.get(entry.date)!.push({
+                                                      vendor: entry.vendor,
+                                                      amount: entry.amount
+                                                    });
+                                                  });
+                                                  
+                                                  // Convert to sorted array with combined vendor info
+                                                  const dateEntries = Array.from(byDate.entries())
+                                                    .map(([date, items]) => {
+                                                      const totalAmount = items.reduce((sum, item) => sum + item.amount, 0);
+                                                      const vendors = items.map(item => item.vendor).join(', ');
+                                                      return { date, amount: totalAmount, vendors };
+                                                    })
+                                                    .sort((a, b) => a.date.localeCompare(b.date));
+                                                  
+                                                  return (
+                                                    <div key={category} className="border rounded-md p-2">
+                                                      <div className="flex items-center justify-between mb-2">
+                                                        <span className={`text-xs font-medium ${isViolated ? 'text-destructive' : ''}`}>
+                                                          {category}
+                                                        </span>
+                                                        <span className={`text-xs font-semibold ${isViolated ? 'text-destructive' : ''}`}>
+                                                          ${categoryTotal.toFixed(2)}
+                                                        </span>
+                                                      </div>
+                                                      <Table>
+                                                        <TableHeader>
+                                                          <TableRow>
+                                                            <TableHead className="h-8">Date</TableHead>
+                                                            <TableHead className="h-8">Vendor</TableHead>
+                                                            <TableHead className="h-8 text-right">Amount</TableHead>
+                                                          </TableRow>
+                                                        </TableHeader>
+                                                        <TableBody>
+                                                          {dateEntries.map((entry, idx) => (
+                                                            <TableRow key={`${entry.date}-${idx}`}>
+                                                              <TableCell className="py-1">{entry.date}</TableCell>
+                                                              <TableCell className="py-1 text-xs">{entry.vendors}</TableCell>
+                                                              <TableCell className="py-1 text-right">${entry.amount.toFixed(2)}</TableCell>
+                                                            </TableRow>
+                                                          ))}
+                                                        </TableBody>
+                                                      </Table>
+                                                    </div>
+                                                  );
+                                                })}
+                                              </div>
+                                            );
+                                          })()}
+                                        </div>
+                                        
+                                        {e.ruleResults.transactionViolations.filter((v) => v.weekEnding === w.weekEnding).length > 0 && (
+                                          <div>
+                                            <div className="text-xs font-medium text-muted-foreground mb-2">Transaction-Level Violations</div>
+                                            <Table>
+                                              <TableHeader>
+                                                <TableRow>
+                                                  <TableHead className="h-8">Date</TableHead>
+                                                  <TableHead className="h-8">Category</TableHead>
+                                                  <TableHead className="h-8">Location</TableHead>
+                                                  <TableHead className="h-8 text-right">Amount</TableHead>
+                                                  <TableHead className="h-8">Rule</TableHead>
+                                                </TableRow>
+                                              </TableHeader>
+                                              <TableBody>
+                                                {e.ruleResults.transactionViolations
+                                                  .filter((v) => v.weekEnding === w.weekEnding)
+                                                  .map((v, idx) => (
+                                                    <TableRow key={`${v.date}-${v.category}-${v.amount}-${idx}`}>
+                                                      <TableCell className="py-1">{v.date}</TableCell>
+                                                      <TableCell className="py-1">{v.category}</TableCell>
+                                                      <TableCell className="py-1 text-xs">{v.location}</TableCell>
+                                                      <TableCell className="py-1 text-right font-medium">${v.amount.toFixed(2)}</TableCell>
+                                                      <TableCell className="py-1">
+                                                        <Badge variant="outline" className="text-[10px] px-1.5 py-0.5">
+                                                          {ruleNameById[v.ruleId] ?? v.ruleId}
+                                                        </Badge>
+                                                      </TableCell>
+                                                    </TableRow>
+                                                  ))}
+                                              </TableBody>
+                                            </Table>
                                           </div>
-                                        ) : (
-                                          <Table>
-                                            <TableHeader>
-                                              <TableRow>
-                                                <TableHead>Date</TableHead>
-                                                <TableHead>Category</TableHead>
-                                                <TableHead>Location</TableHead>
-                                                <TableHead className="text-right">Amount</TableHead>
-                                                <TableHead>Rule</TableHead>
-                                              </TableRow>
-                                            </TableHeader>
-                                            <TableBody>
-                                              {e.ruleResults.transactionViolations
-                                                .filter((v) => v.weekEnding === w.weekEnding)
-                                                .map((v, idx) => (
-                                                  <TableRow key={`${v.date}-${v.category}-${v.amount}-${idx}`}>
-                                                    <TableCell>{v.date}</TableCell>
-                                                    <TableCell>{v.category}</TableCell>
-                                                    <TableCell>{v.location}</TableCell>
-                                                    <TableCell className="text-right font-medium">${v.amount.toFixed(2)}</TableCell>
-                                                    <TableCell>
-                                                      <Badge variant="outline" className="text-[10px] px-1.5 py-0.5">
-                                                        {ruleNameById[v.ruleId] ?? v.ruleId}
-                                                      </Badge>
-                                                    </TableCell>
-                                                  </TableRow>
-                                                ))}
-                                            </TableBody>
-                                          </Table>
                                         )}
                                       </div>
                                     </TableCell>
