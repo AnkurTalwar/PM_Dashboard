@@ -24,7 +24,7 @@ import {
   getProgramPackageStoreSnapshot,
   subscribeProgramPackageStore,
 } from '@/lib/program-package';
-import { getLtaSummaryFromExcel, hasLtaData } from '@/lib/lta-adapter';
+import { getLtaSummaryFromExcel, hasLtaData, getLtaDateRange } from '@/lib/lta-adapter';
 import { 
   subscribeExcelExpenseStore, 
   getExcelExpenseStoreSnapshot 
@@ -180,6 +180,12 @@ export default function LtaTracking() {
   const packageLtaData = getActiveLtaSummary();
   const baseLtaData = excelLtaData.length > 0 ? excelLtaData : packageLtaData;
   const dataSource = excelLtaData.length > 0 ? 'excel' : packageLtaData.length > 0 ? 'package' : 'none';
+  
+  // Get the rolling 12-month window date range
+  const ltaDateRange = getLtaDateRange();
+  const dateRangeText = ltaDateRange 
+    ? `${new Date(ltaDateRange.start).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })} - ${new Date(ltaDateRange.end).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`
+    : '';
 
   const dateBounds = useMemo(() => {
     const allDates = baseLtaData.flatMap((r) => r.lodgingEntries.map((e) => e.date));
@@ -309,14 +315,14 @@ export default function LtaTracking() {
           const [year, month] = monthKey.split('-').map(Number);
           const monthDate = new Date(Date.UTC(year, (month ?? 1) - 1, 1));
           return {
-            month: monthDate.toLocaleString('en-US', { month: 'short' }),
+            month: `${monthDate.toLocaleString('en-US', { month: 'short' })} ${year}`,
             nights: monthMap.get(monthKey) ?? 0,
           };
         });
 
         const totalNights = filteredEntries.length;
         const threshold = resource.threshold;
-        const status = totalNights > threshold ? 'BREACH' : totalNights > 90 ? 'WARNING' : 'OK';
+        const status = totalNights > threshold ? 'BREACH' : totalNights >= 100 ? 'WARNING' : 'OK';
         let trailingInactiveMonths = 0;
 
         for (let index = monthlyBreakdown.length - 1; index >= 0; index -= 1) {
@@ -340,7 +346,7 @@ export default function LtaTracking() {
         if (resourceActivityFilter === 'all') return true;
         return resource.activityStatus === resourceActivityFilter;
       });
-  }, [baseLtaData, startDate, endDate, dateBounds.min, dateBounds.max, selectedStates, selectedCities, resourceActivityFilter]);
+  }, [baseLtaData, dataSource, startDate, endDate, dateBounds.min, dateBounds.max, selectedStates, selectedCities, resourceActivityFilter]);
 
   const breachCount = ltaData.filter((r) => r.status === 'BREACH').length;
   const warningCount = ltaData.filter((r) => r.status === 'WARNING').length;
@@ -350,7 +356,10 @@ export default function LtaTracking() {
     <div className="space-y-6">
       <div>
         <h1 className="text-3xl font-bold">LTA Tracking</h1>
-        <p className="text-muted-foreground mt-1">Rolling 12-month lodging night compliance (120-night threshold)</p>
+        <p className="text-muted-foreground mt-1">
+          Rolling 12-month lodging night compliance (120-night threshold)
+          {dateRangeText && ` • ${dateRangeText}`}
+        </p>
       </div>
       
       {dataSource === 'none' && (
@@ -490,7 +499,7 @@ export default function LtaTracking() {
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {ltaData.map((resource) => (
-          <Card key={resource.resourceName}>
+          <Card key={`${resource.resourceName}-${startDate}-${endDate}-${selectedStates.join(',')}-${selectedCities.join(',')}`}>
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">

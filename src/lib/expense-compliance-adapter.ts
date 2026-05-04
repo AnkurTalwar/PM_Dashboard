@@ -10,6 +10,7 @@ export interface ExpenseComplianceSummary {
   violationCount: number;
   mealViolations: number;
   lodgingViolations: number;
+  airfareViolations: number;
   weeklyViolations: number;
   expenseEntries: Array<{
     date: string;
@@ -18,6 +19,7 @@ export interface ExpenseComplianceSummary {
     amount: number;
     location: string;
     project: string;
+    vendor: string;
   }>;
   weeklyBreakdown: Array<{
     weekEnding: string;
@@ -35,13 +37,15 @@ export interface ExpenseComplianceSummary {
 const DEFAULT_POLICY_LIMITS = {
   mealsPerDay: 79,
   lodgingPerNight: 262,
-  weeklyNonAirfare: 1350
+  airfarePerWeek: 2000,
+  weeklyTotal: 1350
 };
 
 export interface CustomPolicyLimits {
   mealsPerDay: number;
   lodgingPerNight: number;
-  weeklyNonAirfare: number;
+  airfarePerWeek: number;
+  weeklyTotal: number;
 }
 
 // LocalStorage-based policy store
@@ -53,9 +57,19 @@ function loadCustomLimits(): CustomPolicyLimits | null {
   try {
     const raw = localStorage.getItem(POLICY_STORAGE_KEY);
     if (raw) {
-      const parsed = JSON.parse(raw) as CustomPolicyLimits;
-      if (parsed.mealsPerDay > 0 && parsed.lodgingPerNight > 0 && parsed.weeklyNonAirfare > 0) {
-        return parsed;
+      const parsed = JSON.parse(raw) as any;
+      // Migrate old weeklyNonAirfare to weeklyTotal
+      if (parsed.weeklyNonAirfare !== undefined && parsed.weeklyTotal === undefined) {
+        parsed.weeklyTotal = parsed.weeklyNonAirfare;
+        delete parsed.weeklyNonAirfare;
+      }
+      // Add default airfarePerWeek if missing
+      if (parsed.airfarePerWeek === undefined) {
+        parsed.airfarePerWeek = DEFAULT_POLICY_LIMITS.airfarePerWeek;
+      }
+      if (parsed.mealsPerDay > 0 && parsed.lodgingPerNight > 0 && parsed.weeklyTotal > 0 && parsed.airfarePerWeek > 0) {
+        saveCustomLimits(parsed);
+        return parsed as CustomPolicyLimits;
       }
     }
   } catch {
@@ -201,12 +215,13 @@ export function getExpenseComplianceFromExcel(policyLimits?: CustomPolicyLimits)
       });
       
       const total = meals + lodging + airfare + ground + other;
-      const nonAirfareTotal = total - airfare;
       
-      // Check violations
+      // Check violations (all four thresholds)
       const hasViolation = 
-        lodging > limits.lodgingPerNight || 
-        nonAirfareTotal > limits.weeklyNonAirfare;
+        meals / 7 > limits.mealsPerDay ||
+        lodging > limits.lodgingPerNight ||
+        airfare > limits.airfarePerWeek ||
+        total > limits.weeklyTotal;
       
       return {
         weekEnding,
@@ -223,7 +238,8 @@ export function getExpenseComplianceFromExcel(policyLimits?: CustomPolicyLimits)
     // Count violations
     const mealViolations = weeklyBreakdown.filter(w => w.meals / 7 > limits.mealsPerDay).length;
     const lodgingViolations = weeklyBreakdown.filter(w => w.lodging > limits.lodgingPerNight).length;
-    const weeklyViolations = weeklyBreakdown.filter(w => (w.total - w.airfare) > limits.weeklyNonAirfare).length;
+    const airfareViolations = weeklyBreakdown.filter(w => w.airfare > limits.airfarePerWeek).length;
+    const weeklyViolations = weeklyBreakdown.filter(w => w.total > limits.weeklyTotal).length;
     const violationCount = weeklyBreakdown.filter(w => w.hasViolation).length;
     
     // Expense entries
@@ -233,7 +249,8 @@ export function getExpenseComplianceFromExcel(policyLimits?: CustomPolicyLimits)
       category: getCategory(expense.expenseType),
       amount: expense.expenses,
       location: expense.expenseLocation || 'Unknown',
-      project: expense.engagementDescription || expense.engagement
+      project: expense.engagementDescription || expense.engagement,
+      vendor: expense.vendor || expense.additionalDetails || expense.expenseNarrative || 'Not specified'
     }));
     
     const totalExpenses = employeeExpenses.reduce((sum, e) => sum + e.expenses, 0);
@@ -244,6 +261,7 @@ export function getExpenseComplianceFromExcel(policyLimits?: CustomPolicyLimits)
       violationCount,
       mealViolations,
       lodgingViolations,
+      airfareViolations,
       weeklyViolations,
       expenseEntries,
       weeklyBreakdown
