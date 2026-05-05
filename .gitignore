@@ -44,6 +44,9 @@ MANIFEST
 # User data files (program packages)
 program-package-input_files/
 
+# Nested project folder (backup/old version)
+Project Management Dashboard/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
